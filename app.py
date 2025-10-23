@@ -4,6 +4,8 @@ from dash import dcc, html, Input, Output, State, callback_context
 import uuid
 import os
 import base64
+import io
+import zipfile
 from google.cloud import storage
 from flask import Flask, send_from_directory, session
 
@@ -13,8 +15,15 @@ server.config['SECRET_KEY'] = os.urandom(24)
 
 # --- Google Cloud Storage Setup ---
 BUCKET_NAME = os.environ.get('BUCKET_NAME', 'your-gcs-bucket-name')
-storage_client = storage.Client()
-bucket = storage_client.bucket(BUCKET_NAME)
+USE_GCS = BUCKET_NAME != 'your-gcs-bucket-name'
+
+if USE_GCS:
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(BUCKET_NAME)
+else:
+    UPLOAD_FOLDER = 'uploads'
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
 
 # --- Dash App Initialization ---
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -22,6 +31,7 @@ app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTST
 # --- App Layout ---
 app.layout = html.Div([
     dcc.Store(id='tasks-store', storage_type='session'),
+    dcc.Download(id="download-all-zip"),
     dbc.Container([
         html.H1("To-Do List"),
         dbc.Input(id='new-task-input', placeholder='Enter a new task...', type='text'),
@@ -35,13 +45,28 @@ app.layout = html.Div([
             },
             multiple=False
         ),
-        dbc.Button('Add Task', id='add-task-button', n_clicks=0, className="mt-2"),
+        dbc.Row([
+            dbc.Col(dbc.Button('Add Task', id='add-task-button', n_clicks=0, className="mt-2 w-100")),
+            dbc.Col(dbc.Button('Download All Attachments', id='download-all-button', n_clicks=0, className="mt-2 w-100")),
+        ]),
         html.Hr(),
         html.Div(id='task-list'),
         dbc.Modal([
             dbc.ModalHeader("Edit Task"),
             dbc.ModalBody([
                 dbc.Input(id='edit-task-input', type='text'),
+                html.Div(id='edit-attachment-display', className="mt-2"),
+                dcc.Upload(
+                    id='replace-attachment-upload',
+                    children=html.Div(['Drag and Drop or ', html.A('Select File to Replace')]),
+                    style={
+                        'width': '100%', 'height': '60px', 'lineHeight': '60px',
+                        'borderWidth': '1px', 'borderStyle': 'dashed',
+                        'borderRadius': '5px', 'textAlign': 'center', 'margin': '10px 0'
+                    },
+                    multiple=False
+                ),
+                dbc.Button("Remove Attachment", id="remove-attachment-button", color="warning", className="mt-2", n_clicks=0),
                 dcc.Store(id='edit-task-id-store')
             ]),
             dbc.ModalFooter(
@@ -51,6 +76,11 @@ app.layout = html.Div([
     ])
 ])
 
+def is_image_file(filename):
+    if not filename:
+        return False
+    return filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
+
 def create_task_list(tasks):
     if not tasks:
         return [html.P("No tasks yet!")]
@@ -58,10 +88,18 @@ def create_task_list(tasks):
         dbc.ListGroupItem([
             dbc.Row([
                 dbc.Col([
-                    dbc.Checkbox(id={'type': 'task-checkbox', 'index': task['id']}, checked=task['completed']),
+                    dbc.Checkbox(id={'type': 'task-checkbox', 'index': task['id']}, value=bool(task['completed'])),
                     html.Span(task['label'], style={'textDecoration': 'line-through' if task['completed'] else 'none'})
                 ], width=6),
-                dbc.Col(html.A(task['attachment'], href=f"/download/{task['attachment']}") if task.get('attachment') else "", width=2),
+                dbc.Col(
+                    html.A(
+                        html.Img(src=f"/download/{task['attachment']}", style={'height':'50px'}),
+                        href=f"/download/{task['attachment']}",
+                        download=task.get('attachment')
+                    ) if is_image_file(task.get('attachment'))
+                    else html.A(task['attachment'], href=f"/download/{task['attachment']}", download=task.get('attachment')) if task.get('attachment') else "",
+                    width=2
+                ),
                 dbc.Col([
                     dbc.Button("Edit", id={'type': 'edit-button', 'index': task['id']}, size="sm", className="me-1"),
                     dbc.Button("Delete", id={'type': 'delete-button', 'index': task['id']}, size="sm", color="danger"),
@@ -76,16 +114,19 @@ def create_task_list(tasks):
     Input('add-task-button', 'n_clicks'),
     Input('save-edit-button', 'n_clicks'),
     Input({'type': 'delete-button', 'index': dash.dependencies.ALL}, 'n_clicks'),
-    Input({'type': 'task-checkbox', 'index': dash.dependencies.ALL}, 'checked'),
+    Input({'type': 'task-checkbox', 'index': dash.dependencies.ALL}, 'value'),
+    Input('remove-attachment-button', 'n_clicks'),
     State('new-task-input', 'value'),
     State('upload-attachment', 'contents'),
     State('upload-attachment', 'filename'),
     State('edit-task-input', 'value'),
     State('edit-task-id-store', 'data'),
     State('tasks-store', 'data'),
+    State('replace-attachment-upload', 'contents'),
+    State('replace-attachment-upload', 'filename'),
     prevent_initial_call=True
 )
-def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_task, attachment_contents, attachment_filename, edited_task, task_id_to_edit, tasks_data):
+def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove_attachment_clicks, new_task, attachment_contents, attachment_filename, edited_task, task_id_to_edit, tasks_data, replace_contents, replace_filename):
     tasks = tasks_data or []
     ctx = callback_context
     triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
@@ -96,8 +137,12 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_ta
             content_type, content_string = attachment_contents.split(',')
             decoded = base64.b64decode(content_string)
             filename = str(uuid.uuid4()) + '-' + attachment_filename
-            blob = bucket.blob(filename)
-            blob.upload_from_string(decoded)
+            if USE_GCS:
+                blob = bucket.blob(filename)
+                blob.upload_from_string(decoded)
+            else:
+                with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as f:
+                    f.write(decoded)
 
         new_task_obj = {
             'id': str(uuid.uuid4()),
@@ -107,10 +152,43 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_ta
         }
         tasks.append(new_task_obj)
 
-    elif 'save-edit-button' in triggered_id and edited_task and task_id_to_edit:
+    elif 'save-edit-button' in triggered_id and task_id_to_edit:
         for task in tasks:
             if task['id'] == task_id_to_edit:
-                task['label'] = edited_task
+                if edited_task:
+                    task['label'] = edited_task
+                if replace_contents:
+                    if task.get('attachment'):
+                        if USE_GCS:
+                            old_blob = bucket.blob(task['attachment'])
+                            if old_blob.exists():
+                                old_blob.delete()
+                        else:
+                            os.remove(os.path.join(UPLOAD_FOLDER, task['attachment']))
+                    
+                    content_type, content_string = replace_contents.split(',')
+                    decoded = base64.b64decode(content_string)
+                    new_filename = str(uuid.uuid4()) + '-' + replace_filename
+                    if USE_GCS:
+                        new_blob = bucket.blob(new_filename)
+                        new_blob.upload_from_string(decoded)
+                    else:
+                        with open(os.path.join(UPLOAD_FOLDER, new_filename), 'wb') as f:
+                            f.write(decoded)
+                    task['attachment'] = new_filename
+                break
+    
+    elif 'remove-attachment-button' in triggered_id and task_id_to_edit:
+        for task in tasks:
+            if task['id'] == task_id_to_edit:
+                if task.get('attachment'):
+                    if USE_GCS:
+                        blob = bucket.blob(task['attachment'])
+                        if blob.exists():
+                            blob.delete()
+                    else:
+                        os.remove(os.path.join(UPLOAD_FOLDER, task['attachment']))
+                    task['attachment'] = None
                 break
 
     elif 'delete-button' in triggered_id:
@@ -118,16 +196,20 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_ta
         task_to_delete = next((task for task in tasks if task['id'] == task_id), None)
         if task_to_delete:
             if task_to_delete.get('attachment'):
-                blob = bucket.blob(task_to_delete['attachment'])
-                if blob.exists():
-                    blob.delete()
+                if USE_GCS:
+                    blob = bucket.blob(task_to_delete['attachment'])
+                    if blob.exists():
+                        blob.delete()
+                else:
+                    os.remove(os.path.join(UPLOAD_FOLDER, task_to_delete['attachment']))
             tasks = [task for task in tasks if task['id'] != task_id]
 
     elif 'task-checkbox' in triggered_id:
         task_id = eval(triggered_id)['index']
+        new_value = ctx.triggered[0]['value']
         for task in tasks:
             if task['id'] == task_id:
-                task['completed'] = not task['completed']
+                task['completed'] = new_value
                 break
 
     return create_task_list(tasks), tasks
@@ -136,6 +218,7 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_ta
     Output('edit-modal', 'is_open'),
     Output('edit-task-input', 'value'),
     Output('edit-task-id-store', 'data'),
+    Output('edit-attachment-display', 'children'),
     Input({'type': 'edit-button', 'index': dash.dependencies.ALL}, 'n_clicks'),
     Input('save-edit-button', 'n_clicks'),
     State('tasks-store', 'data'),
@@ -144,31 +227,73 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, new_ta
 def toggle_edit_modal(edit_clicks, save_clicks, tasks_data):
     tasks = tasks_data or []
     ctx = callback_context
-    if not ctx.triggered or not any(c for c in edit_clicks if c is not None):
-        return False, "", None
+    if not ctx.triggered or (not any(c for c in edit_clicks if c is not None) and not save_clicks):
+        return False, "", None, None
 
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     if 'edit-button' in button_id:
         task_id = eval(button_id)['index']
         task = next((task for task in tasks if task['id'] == task_id), None)
         if task:
-            return True, task['label'], task['id']
+            attachment_display = []
+            if task.get('attachment'):
+                if is_image_file(task['attachment']):
+                    attachment_display = [html.Img(src=f"/download/{task['attachment']}", style={'height':'100px'})]
+                else:
+                    attachment_display = [html.A(task['attachment'], href=f"/download/{task['attachment']}")]
+            return True, task['label'], task['id'], attachment_display
 
-    return False, "", None
+    return False, "", None, None
 
 @server.route('/download/<path:filename>')
 def download_file(filename):
-    blob = bucket.blob(filename)
-    if not blob.exists():
-        return "File not found", 404
-    
-    temp_dir = "temp_downloads"
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
+    if USE_GCS:
+        blob = bucket.blob(filename)
+        if not blob.exists():
+            return "File not found", 404
         
-    destination_file_path = os.path.join(temp_dir, filename)
-    blob.download_to_filename(destination_file_path)
-    return send_from_directory(temp_dir, filename, as_attachment=True)
+        temp_dir = "temp_downloads"
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+            
+        destination_file_path = os.path.join(temp_dir, filename)
+        blob.download_to_filename(destination_file_path)
+        return send_from_directory(temp_dir, filename, as_attachment=True)
+    else:
+        return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+@app.callback(
+    Output("download-all-zip", "data"),
+    Input("download-all-button", "n_clicks"),
+    State("tasks-store", "data"),
+    prevent_initial_call=True,
+)
+def download_all_attachments(n_clicks, tasks_data):
+    tasks = tasks_data or []
+    attachments = [task['attachment'] for task in tasks if task.get('attachment')]
+
+    if not attachments:
+        return None
+
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for filename in attachments:
+            if USE_GCS:
+                blob = bucket.blob(filename)
+                if blob.exists():
+                    try:
+                        file_content = blob.download_as_bytes()
+                        zf.writestr(filename, file_content)
+                    except Exception as e:
+                        print(f"Error downloading {filename} from GCS: {e}")
+            else:
+                file_path = os.path.join(UPLOAD_FOLDER, filename)
+                if os.path.exists(file_path):
+                    zf.write(file_path, os.path.basename(file_path))
+
+    memory_file.seek(0)
+    return dcc.send_bytes(memory_file.getvalue(), "attachments.zip")
+
 
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=8050)

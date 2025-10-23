@@ -20,6 +20,6 @@ steps:
   - 'managed'
   - '--allow-unauthenticated'
   - '--set-env-vars'
-  - 'BUCKET_NAME=your-gcs-bucket-name'
-  images:
+  - 'BUCKET_NAME=ojt252-bucket'
+images:
 - 'us-central1-docker.pkg.dev/$PROJECT_ID/images/todolist'

@@ -3,8 +3,6 @@ services:
   web:
     build: .
     ports:
-      - "8050:8050"
-    environment:
-      - BUCKET_NAME=ojt252-bucket
+      - "8050:8080"
     volumes:
-      - .:/app
+      - ./uploads:/app/uploads
