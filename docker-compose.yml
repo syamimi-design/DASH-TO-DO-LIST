@@ -1,8 +1,10 @@
 version: '3.8'
 services:
-  app:
+  web:
     build: .
     ports:
-      - "8050:8080"
+      - "8050:8050"
+    environment:
+      - BUCKET_NAME=ojt252-bucket
     volumes:
       - .:/app
