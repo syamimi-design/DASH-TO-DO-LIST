@@ -14,16 +14,14 @@ server = Flask(__name__)
 server.config['SECRET_KEY'] = os.urandom(24)
 
 # --- Google Cloud Storage Setup ---
-BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ojt252-bucket')
-USE_GCS = BUCKET_NAME != 'ojt252-bucket'
-
-if USE_GCS:
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(BUCKET_NAME)
-else:
-    UPLOAD_FOLDER = 'uploads'
-    if not os.path.exists(UPLOAD_FOLDER):
-        os.makedirs(UPLOAD_FOLDER)
+# The BUCKET_NAME will be provided by the cloudbuild.yaml file during deployment.
+# For local development, you can set this environment variable.
+BUCKET_NAME = os.environ.get('BUCKET_NAME')
+storage_client = storage.Client()
+bucket = storage_client.bucket(BUCKET_NAME) if BUCKET_NAME else None
+UPLOAD_FOLDER = 'uploads' # Used for local fallback if BUCKET_NAME is not set
+if not BUCKET_NAME and not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
 # --- Dash App Initialization ---
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -137,10 +135,10 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
             content_type, content_string = attachment_contents.split(',')
             decoded = base64.b64decode(content_string)
             filename = str(uuid.uuid4()) + '-' + attachment_filename
-            if USE_GCS:
+            if bucket:
                 blob = bucket.blob(filename)
                 blob.upload_from_string(decoded)
-            else:
+            else: # Fallback to local storage if bucket is not configured
                 with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as f:
                     f.write(decoded)
 
@@ -159,7 +157,7 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
                     task['label'] = edited_task
                 if replace_contents:
                     if task.get('attachment'):
-                        if USE_GCS:
+                        if bucket:
                             old_blob = bucket.blob(task['attachment'])
                             if old_blob.exists():
                                 old_blob.delete()
@@ -169,7 +167,7 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
                     content_type, content_string = replace_contents.split(',')
                     decoded = base64.b64decode(content_string)
                     new_filename = str(uuid.uuid4()) + '-' + replace_filename
-                    if USE_GCS:
+                    if bucket:
                         new_blob = bucket.blob(new_filename)
                         new_blob.upload_from_string(decoded)
                     else:
@@ -182,7 +180,7 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
         for task in tasks:
             if task['id'] == task_id_to_edit:
                 if task.get('attachment'):
-                    if USE_GCS:
+                    if bucket:
                         blob = bucket.blob(task['attachment'])
                         if blob.exists():
                             blob.delete()
@@ -196,7 +194,7 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
         task_to_delete = next((task for task in tasks if task['id'] == task_id), None)
         if task_to_delete:
             if task_to_delete.get('attachment'):
-                if USE_GCS:
+                if bucket:
                     blob = bucket.blob(task_to_delete['attachment'])
                     if blob.exists():
                         blob.delete()
@@ -247,7 +245,7 @@ def toggle_edit_modal(edit_clicks, save_clicks, tasks_data):
 
 @server.route('/download/<path:filename>')
 def download_file(filename):
-    if USE_GCS:
+    if bucket:
         blob = bucket.blob(filename)
         if not blob.exists():
             return "File not found", 404
@@ -278,7 +276,7 @@ def download_all_attachments(n_clicks, tasks_data):
     memory_file = io.BytesIO()
     with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
         for filename in attachments:
-            if USE_GCS:
+            if bucket:
                 blob = bucket.blob(filename)
                 if blob.exists():
                     try:
