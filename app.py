@@ -14,8 +14,8 @@ server = Flask(__name__)
 server.config['SECRET_KEY'] = os.urandom(24)
 
 # --- Google Cloud Storage Setup ---
-BUCKET_NAME = os.environ.get('BUCKET_NAME', 'your-gcs-bucket-name')
-USE_GCS = BUCKET_NAME != 'your-gcs-bucket-name'
+BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ojt252-bucket')
+USE_GCS = BUCKET_NAME != 'ojt252-bucket'
 
 if USE_GCS:
     storage_client = storage.Client()
