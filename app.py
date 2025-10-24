@@ -6,22 +6,18 @@ import os
 import base64
 import io
 import zipfile
+from flask import Flask, send_from_directory, session, redirect
 from google.cloud import storage
-from flask import Flask, send_from_directory, session
+from datetime import timedelta
 
 # --- Flask Server and Session Setup ---
 server = Flask(__name__)
 server.config['SECRET_KEY'] = os.urandom(24)
 
 # --- Google Cloud Storage Setup ---
-# The BUCKET_NAME will be provided by the cloudbuild.yaml file during deployment.
-# For local development, you can set this environment variable.
-BUCKET_NAME = os.environ.get('BUCKET_NAME')
+BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME', 'ojt252_bucket')
 storage_client = storage.Client()
-bucket = storage_client.bucket(BUCKET_NAME) if BUCKET_NAME else None
-UPLOAD_FOLDER = 'uploads' # Used for local fallback if BUCKET_NAME is not set
-if not BUCKET_NAME and not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+bucket = storage_client.bucket(BUCKET_NAME)
 
 # --- Dash App Initialization ---
 app = dash.Dash(__name__, server=server, external_stylesheets=[dbc.themes.BOOTSTRAP], suppress_callback_exceptions=True)
@@ -91,11 +87,11 @@ def create_task_list(tasks):
                 ], width=6),
                 dbc.Col(
                     html.A(
-                        html.Img(src=f"/download/{task['attachment']}", style={'height':'50px'}),
-                        href=f"/download/{task['attachment']}",
-                        download=task.get('attachment')
+                        html.Img(src=f"/gcs/download/{task['attachment']}", style={'height':'50px'}),
+                        href=f"/gcs/download/{task['attachment']}",
+                        target="_blank" # Open in new tab
                     ) if is_image_file(task.get('attachment'))
-                    else html.A(task['attachment'], href=f"/download/{task['attachment']}", download=task.get('attachment')) if task.get('attachment') else "",
+                    else html.A(task['attachment'], href=f"/gcs/download/{task['attachment']}", target="_blank") if task.get('attachment') else "",
                     width=2
                 ),
                 dbc.Col([
@@ -135,12 +131,8 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
             content_type, content_string = attachment_contents.split(',')
             decoded = base64.b64decode(content_string)
             filename = str(uuid.uuid4()) + '-' + attachment_filename
-            if bucket:
-                blob = bucket.blob(filename)
-                blob.upload_from_string(decoded)
-            else: # Fallback to local storage if bucket is not configured
-                with open(os.path.join(UPLOAD_FOLDER, filename), 'wb') as f:
-                    f.write(decoded)
+            blob = bucket.blob(filename)
+            blob.upload_from_string(decoded, content_type=content_type)
 
         new_task_obj = {
             'id': str(uuid.uuid4()),
@@ -157,22 +149,15 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
                     task['label'] = edited_task
                 if replace_contents:
                     if task.get('attachment'):
-                        if bucket:
-                            old_blob = bucket.blob(task['attachment'])
-                            if old_blob.exists():
-                                old_blob.delete()
-                        else:
-                            os.remove(os.path.join(UPLOAD_FOLDER, task['attachment']))
+                        old_blob = bucket.blob(task['attachment'])
+                        if old_blob.exists():
+                            old_blob.delete()
                     
                     content_type, content_string = replace_contents.split(',')
                     decoded = base64.b64decode(content_string)
                     new_filename = str(uuid.uuid4()) + '-' + replace_filename
-                    if bucket:
-                        new_blob = bucket.blob(new_filename)
-                        new_blob.upload_from_string(decoded)
-                    else:
-                        with open(os.path.join(UPLOAD_FOLDER, new_filename), 'wb') as f:
-                            f.write(decoded)
+                    new_blob = bucket.blob(new_filename)
+                    new_blob.upload_from_string(decoded, content_type=content_type)
                     task['attachment'] = new_filename
                 break
     
@@ -180,12 +165,9 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
         for task in tasks:
             if task['id'] == task_id_to_edit:
                 if task.get('attachment'):
-                    if bucket:
-                        blob = bucket.blob(task['attachment'])
-                        if blob.exists():
-                            blob.delete()
-                    else:
-                        os.remove(os.path.join(UPLOAD_FOLDER, task['attachment']))
+                    blob = bucket.blob(task['attachment'])
+                    if blob.exists():
+                        blob.delete()
                     task['attachment'] = None
                 break
 
@@ -194,12 +176,9 @@ def update_tasks(add_clicks, save_clicks, delete_clicks, checkbox_values, remove
         task_to_delete = next((task for task in tasks if task['id'] == task_id), None)
         if task_to_delete:
             if task_to_delete.get('attachment'):
-                if bucket:
-                    blob = bucket.blob(task_to_delete['attachment'])
-                    if blob.exists():
-                        blob.delete()
-                else:
-                    os.remove(os.path.join(UPLOAD_FOLDER, task_to_delete['attachment']))
+                blob = bucket.blob(task_to_delete['attachment'])
+                if blob.exists():
+                    blob.delete()
             tasks = [task for task in tasks if task['id'] != task_id]
 
     elif 'task-checkbox' in triggered_id:
@@ -236,29 +215,25 @@ def toggle_edit_modal(edit_clicks, save_clicks, tasks_data):
             attachment_display = []
             if task.get('attachment'):
                 if is_image_file(task['attachment']):
-                    attachment_display = [html.Img(src=f"/download/{task['attachment']}", style={'height':'100px'})]
+                    attachment_display = [html.Img(src=f"/gcs/download/{task['attachment']}", style={'height':'100px'})]
                 else:
-                    attachment_display = [html.A(task['attachment'], href=f"/download/{task['attachment']}")]
+                    attachment_display = [html.A(task['attachment'], href=f"/gcs/download/{task['attachment']}", target="_blank")]
             return True, task['label'], task['id'], attachment_display
 
     return False, "", None, None
 
-@server.route('/download/<path:filename>')
-def download_file(filename):
-    if bucket:
-        blob = bucket.blob(filename)
-        if not blob.exists():
-            return "File not found", 404
-        
-        temp_dir = "temp_downloads"
-        if not os.path.exists(temp_dir):
-            os.makedirs(temp_dir)
-            
-        destination_file_path = os.path.join(temp_dir, filename)
-        blob.download_to_filename(destination_file_path)
-        return send_from_directory(temp_dir, filename, as_attachment=True)
-    else:
-        return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+@server.route('/gcs/download/<path:filename>')
+def download_gcs_file(filename):
+    blob = bucket.blob(filename)
+    if not blob.exists():
+        return "File not found", 404
+    
+    signed_url = blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(minutes=15),
+        method="GET",
+    )
+    return redirect(signed_url)
 
 @app.callback(
     Output("download-all-zip", "data"),
@@ -276,18 +251,10 @@ def download_all_attachments(n_clicks, tasks_data):
     memory_file = io.BytesIO()
     with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
         for filename in attachments:
-            if bucket:
-                blob = bucket.blob(filename)
-                if blob.exists():
-                    try:
-                        file_content = blob.download_as_bytes()
-                        zf.writestr(filename, file_content)
-                    except Exception as e:
-                        print(f"Error downloading {filename} from GCS: {e}")
-            else:
-                file_path = os.path.join(UPLOAD_FOLDER, filename)
-                if os.path.exists(file_path):
-                    zf.write(file_path, os.path.basename(file_path))
+            blob = bucket.blob(filename)
+            if blob.exists():
+                file_bytes = blob.download_as_bytes()
+                zf.writestr(filename, file_bytes)
 
     memory_file.seek(0)
     return dcc.send_bytes(memory_file.getvalue(), "attachments.zip")
