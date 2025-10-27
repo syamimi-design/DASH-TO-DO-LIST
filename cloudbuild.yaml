@@ -1,11 +1,11 @@
 steps:
 # Build the container image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest', '.']
+  args: ['build', '-t', 'us-central1-docker.pkg.dev/ojt252/images/todolist', '.']
 
 # Push the container image to Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest']
+  args: ['push', 'us-central1-docker.pkg.dev/ojt252/images/todolist']
 
 # Deploy container image to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -15,7 +15,7 @@ steps:
   - 'deploy'
   - 'todolist'
   - '--image'
-  - 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest'
+  - 'us-central1-docker.pkg.dev/ojt252/images/todolist'
   - '--region'
   - 'us-central1'
   - '--platform'
@@ -36,4 +36,4 @@ steps:
     - '--platform=managed'
 
 images:
-- 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest'
+- 'us-central1-docker.pkg.dev/ojt252/images/todolist'
