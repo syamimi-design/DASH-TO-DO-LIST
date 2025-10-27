@@ -20,7 +20,7 @@ steps:
   - 'managed'
   - '--allow-unauthenticated'
   - '--set-env-vars'
-  - 'BUCKET_NAME=ojt252-bucket'
+  - 'BUCKET_NAME=ojt252_bucket'
 # Grant Cloud Run Invoker role to allUsers to make the service publicly accessible
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   entrypoint: 'gcloud'
