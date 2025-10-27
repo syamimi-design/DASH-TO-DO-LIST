@@ -42,4 +42,3 @@ steps:
 images:
 - 'us-central1-docker.pkg.dev/ojt252/images/todolist'
 
-
