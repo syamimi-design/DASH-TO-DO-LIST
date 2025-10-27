@@ -1,17 +1,15 @@
 steps:
-# Clone the repository from GitHub into a directory named "todo-app"
-- name: 'gcr.io/cloud-builders/git'
-  args: ['clone', 'https://github.com/syamimi-design/DASH-TO-DO-LIST.git', 'todo-app']
-
-# Build the Docker image using the Dockerfile in the "todo-app" directory
+# Build the container image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest', './todo-app']
+  args: ['build', '-t', 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest', '.']
 
-# Push the Docker image to Google Artifact Registry
+
+# Push the container image to Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest']
 
-# Deploy the container image to Google Cloud Run
+
+# Deploy container image to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   entrypoint: gcloud
   args:
@@ -26,7 +24,8 @@ steps:
   - 'managed'
   - '--allow-unauthenticated'
 
-# Set IAM policy to allow public access
+
+# Grant Cloud Run Invoker role to allUsers
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   entrypoint: 'gcloud'
   args:
@@ -39,5 +38,8 @@ steps:
     - '--region=us-central1'
     - '--platform=managed'
 
+
 images:
 - 'us-central1-docker.pkg.dev/ojt252/images/todolist:latest'
+
+
