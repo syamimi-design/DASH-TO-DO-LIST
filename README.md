@@ -39,21 +39,9 @@ This is a simple to-do list web application built with Dash and Plotly. It is co
 
 This project is designed to be deployed to Google Cloud Run using Google Cloud Build.
 
-### Prerequisites
-
-1.  **Google Cloud Project:** You must have a Google Cloud project with billing enabled.
-2.  **Enable APIs:** Ensure the following APIs are enabled in your project:
-    - Cloud Build API
-    - Cloud Run Admin API
-    - Identity and Access Management (IAM) API
-
 ### Deployment Steps
 
-1.  **Update `cloudbuild.yaml`:**
-
-    Before deploying, you should replace `$PROJECT_ID` with your actual Google Cloud project ID in the `cloudbuild.yaml` file.
-
-2.  **Submit the build:**
+1.  **Submit the build:**
 
     Run the following command from your terminal to start the deployment process:
     ```bash
