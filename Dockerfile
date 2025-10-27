@@ -21,4 +21,4 @@ EXPOSE 8080
 
 # Run app.py when the container launches
 # The container must listen on the port defined by the PORT environment variable
-CMD ["gunicorn", "-b", "0.0.0.0:$PORT", "app:server"]
+CMD ["gunicorn", "-b", ":8080", "app:server"]
