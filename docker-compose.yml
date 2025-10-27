@@ -6,3 +6,4 @@ services:
       - "8050:8080"
     volumes:
       - ./uploads:/app/uploads
+
