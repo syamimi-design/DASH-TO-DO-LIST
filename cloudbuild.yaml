@@ -19,8 +19,6 @@ steps:
   - '--platform'
   - 'managed'
   - '--allow-unauthenticated'
-  - '--set-env-vars'
-  - 'BUCKET_NAME=ojt252_bucket'
 # Grant Cloud Run Invoker role to allUsers to make the service publicly accessible
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   entrypoint: 'gcloud'
@@ -33,14 +31,5 @@ steps:
     - '--role=roles/run.invoker'
     - '--region=us-central1'
     - '--platform=managed'
-# Grant Storage Object Admin role to the service account
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: 'gcloud'
-  args:
-    - 'projects'
-    - 'add-iam-policy-binding'
-    - '$PROJECT_ID'
-    - '--member=serviceAccount:todolist-sa@$PROJECT_ID.iam.gserviceaccount.com'
-    - '--role=roles/storage.objectAdmin'
 images:
 - 'us-central1-docker.pkg.dev/$PROJECT_ID/images/todolist'
