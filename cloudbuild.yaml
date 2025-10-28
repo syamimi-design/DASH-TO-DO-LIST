@@ -11,7 +11,7 @@ steps:
 
 # Deploy container image to Cloud Run
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: gcloud
+  entrypoint: 'gcloud'
   args:
   - 'run'
   - 'deploy'
@@ -23,21 +23,6 @@ steps:
   - '--platform'
   - 'managed'
   - '--allow-unauthenticated'
-
-
-# Grant Cloud Run Invoker role to allUsers
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-  entrypoint: 'gcloud'
-  args:
-    - 'run'
-    - 'services'
-    - 'add-iam-policy-binding'
-    - 'todolist'
-    - '--member=allUsers'
-    - '--role=roles/run.invoker'
-    - '--region=us-central1'
-    - '--platform=managed'
-
 
 images:
 - 'us-central1-docker.pkg.dev/ojt252/images/todolist'
